@@ -25,6 +25,8 @@ func main() {
 
 func handleGetResourceData(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
+
+	// Retrieve the token from the query
 	tokens, ok := query["token"]
 	if !ok {
 		fmt.Printf("No token in request")
@@ -33,13 +35,14 @@ func handleGetResourceData(w http.ResponseWriter, r *http.Request) {
 	}
 	token := tokens[0]
 
+	// verify the token
 	if !verifyToken(token) {
 		fmt.Printf("Invalid auth token\n")
 		w.WriteHeader(500)
 		return
 	}
 
-
+	// Send an empty data structure back, any resource data would normally be stored here
 	resourceData := common.ResourceData{}
 	buff, _ := json.Marshal(&resourceData)
 	w.Header().Set("Content-type", "application/json")
@@ -49,17 +52,22 @@ func handleGetResourceData(w http.ResponseWriter, r *http.Request) {
 	return
 
 }
+
 func verifyToken(token string) bool {
+	// Verify the authorization token
+
 	tokenVerification := map[string]string {
-		"aud": "api://default",
+		"aud": "api://default",   // aud=api://default to verify authorization token
 		"cid": config.ClientId,
 	}
 
+	// Create a verifier
 	jv := verifier.JwtVerifier{
 		Issuer:           issuer,
 		ClaimsToValidate: tokenVerification,
 	}
 
+	// Verify the authorization token
 	result, err := jv.New().VerifyAccessToken(token)
 	if err != nil {
 		fmt.Printf("Error verifying access token: %+v\n", err)

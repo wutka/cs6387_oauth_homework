@@ -58,6 +58,7 @@ func incrementUserCount() int {
 }
 
 func handleMainPage(w http.ResponseWriter, r *http.Request) {
+	// Save a key associated with the user
 	userKey := uuid.New()
 	nonce, _ := oktaUtils.GenerateNonce()
 	userInfo := UserInfo {
@@ -66,6 +67,8 @@ func handleMainPage(w http.ResponseWriter, r *http.Request) {
 	}
 	userMap[userKey.String()] = userInfo
 	fmt.Printf("Using client id %s\n", config.ClientId)
+
+	// Create the initial authorization request
 	authURL := fmt.Sprintf("https://%s/oauth2/default/v1/authorize?client_id=%s&response_type=code&scope=openid&redirect_uri=http%%3A%%2F%%2Flocalhost%%3A8000%%2Fauthorization-code%%2Fcallback&state=%s&nonce=%s",
 		config.OktaDomain, config.ClientId, userKey, nonce)
 	w.Header().Set("Location", authURL)
@@ -73,6 +76,7 @@ func handleMainPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleAuthCode(w http.ResponseWriter, r *http.Request) {
+	// Retrieve the user's authorization code
 	query := r.URL.Query()
 	codes, ok := query["code"]
 	if !ok {
@@ -83,6 +87,7 @@ func handleAuthCode(w http.ResponseWriter, r *http.Request) {
 	code := codes[0]
 	fmt.Printf("Got authorized user with code %s\n", code)
 
+	// Retrieve the user state (the key for the local state map)
 	states, ok := query["state"]
 	if !ok {
 		fmt.Printf("No state returned from OAUTH redirect")
@@ -93,6 +98,7 @@ func handleAuthCode(w http.ResponseWriter, r *http.Request) {
 
 	userInfo := userMap[code]
 
+	// Retrieve the authorization token
 	tokenInfo, err := getAuthToken(code, userInfo.Nonce)
 	if err != nil {
 		fmt.Printf("Error fetching auth token: %+v\n", err)
@@ -100,6 +106,7 @@ func handleAuthCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Get resource data from the other server based on authorization token
 	_, err = getResourceData(tokenInfo, userInfo.Nonce)
 	if err != nil {
 		fmt.Printf("Error fetching resource data: %+v", err)
@@ -107,6 +114,7 @@ func handleAuthCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Fetch the user state, which contains the user number
 	user, ok := userMap[state]
 
 	if ok {
@@ -121,6 +129,7 @@ func handleAuthCode(w http.ResponseWriter, r *http.Request) {
 func getAuthToken(code string, nonce string) (TokenInfo, error) {
 	tokenInfo := TokenInfo{}
 
+	// Set up request parameters
 	formParams := url.Values{}
 	formParams.Set("grant_type", "authorization_code")
 	formParams.Set("redirect_uri", "http://localhost:8000/authorization-code/callback")
@@ -131,16 +140,19 @@ func getAuthToken(code string, nonce string) (TokenInfo, error) {
 
 	client := http.Client{}
 
-	fmt.Printf("Encoded form params: %s\n", formParams.Encode())
 	addr := fmt.Sprintf("https://%s/oauth2/default/v1/token?%s", config.OktaDomain, formParams.Encode())
 	req, _ := http.NewRequest("POST", addr, bytes.NewReader([]byte{}))
 
+	// Send additional parameters as header values
 	req.Header.Add("Authorization", "Basic "+authHeader)
 	req.Header.Add("Accept", "application/json")
 	req.Header.Add("Connection", "close")
+
+	// Empty form data, other parameters passed as query values
 	req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Add("Content-Length", "0")
 
+	// Send the request
 	resp, err := client.Do(req)
 	if err != nil {
 		return tokenInfo, err
@@ -152,12 +164,15 @@ func getAuthToken(code string, nonce string) (TokenInfo, error) {
 		return tokenInfo, err
 	}
 
-	fmt.Printf("Body: %s\n", string(body))
 	err = json.Unmarshal(body, &tokenInfo)
+	if err != nil {
+		return tokenInfo, nil
+	}
 
+	// Verify the id token
 	if !verifyToken(tokenInfo.IdToken, nonce) {
 		fmt.Printf("Invalid ID token\n")
-		return tokenInfo, errors.New("Invalid ID token")
+		return tokenInfo, errors.New("invalid ID token")
 	}
 	return tokenInfo, err
 }
@@ -165,6 +180,7 @@ func getAuthToken(code string, nonce string) (TokenInfo, error) {
 func getResourceData(tokenInfo TokenInfo, nonce string) (common.ResourceData, error) {
 	resourceData := common.ResourceData{}
 
+	// Send a request to the other server with the user's authorization token
 	addr := fmt.Sprintf("http://localhost:9000/getResourceData?token=%s&nonce=%s", tokenInfo.AccessToken, nonce)
 
 	resp, err := http.Get(addr)
@@ -183,17 +199,19 @@ func getResourceData(tokenInfo TokenInfo, nonce string) (common.ResourceData, er
 }
 
 func verifyToken(token string, nonce string) bool {
+	// Verify the client ID in the token
 	tokenVerification := map[string]string{
 		"nonce": nonce,
-		"aud":   config.ClientId,
+		"aud":   config.ClientId,  // aud=clientID validates the id part of the token
 	}
 
+	// Create a verifier
 	jv := verifier.JwtVerifier{
 		Issuer:           issuer,
 		ClaimsToValidate: tokenVerification,
 	}
 
-	fmt.Printf("Trying to verify token: %s\n", token)
+	// Run the verification
 	result, err := jv.New().VerifyAccessToken(token)
 	if err != nil {
 		fmt.Printf("Error verifying access token: %+v\n", err)
@@ -201,7 +219,7 @@ func verifyToken(token string, nonce string) bool {
 	}
 
 	if result != nil {
-		fmt.Printf("Verification result: %+v\n", result)
+		fmt.Printf("ID Verification result: %+v\n", result)
 	}
 
 	return result != nil
